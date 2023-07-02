@@ -187,6 +187,9 @@ void _mkldnn_convolution_out (
     int64_t groups,
     bool is_channels_last,
     const ideep::attr_t& op_attr) {
+  
+  // DEBUG: this is the actuall convolution function on intel cpu with mkldnn lib
+
   auto memory_format = mkldnn_convolution_memory_format(input_t.ndimension(), is_channels_last);
   auto input = input_t.is_mkldnn() ? input_t : input_t.contiguous(memory_format);
   auto weight = weight_t.is_mkldnn() ? weight_t : weight_t.contiguous(memory_format);
@@ -264,6 +267,7 @@ Tensor _mkldnn_convolution(
     output.resize_(output_sizes, memory_format);
     y = itensor_from_tensor(output);
   }
+  // this function doesn't get the output tensor, how does it write result in it?
   _mkldnn_convolution_out(
       input_t,
       weight_t,

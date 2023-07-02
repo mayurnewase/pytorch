@@ -1,0 +1,9 @@
+1. trace 1 simple model training calls upto the binary and modify it
+    check python frontend
+
+    check C backend with cpu
+
+    check C backend with cuda
+
+    check assembly
+

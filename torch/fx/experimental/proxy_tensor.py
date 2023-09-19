@@ -482,11 +482,12 @@ def wrap_key(f, tensors, tracer, pre_dispatch: bool):
             assert isinstance(m, ProxyTorchDispatchMode)
             track_tensor_tree(flat_tensors, flat_proxies, constant=None, tracer=tracer)
 
-        out = f(*tensors)
-        out = pytree.tree_map_only(
+        out = f(*tensors)               # (FakeTensor(..., size=(s0, s0)),)
+        # breakpoint()
+        out = pytree.tree_map_only(     # this converts faketensor to sin for compile_demo function -> TODO: check how
             torch.Tensor,
-            lambda t: get_proxy_slot(t, tracer, t, lambda x: x.proxy),
-            out
+            lambda t: get_proxy_slot(t, tracer, t, lambda x: x.proxy),      # tracer has the tensor_tracker dict which holds the ip arg and sin tensor from compile_demo function, check how it does stores it
+            out                                                             # which gives back sin proxy tensor for the faketensor we got as the key
         )
         out = pytree.tree_map_only(
             (SymInt, SymFloat, SymBool),
@@ -719,7 +720,7 @@ def make_fx(f,
         decomposition_table = {}
 
     @functools.wraps(f)
-    def wrapped(*args):
+    def wrapped(*args):   #  ([FakeTensor(..., size=(4, 4), requires_grad=True), FakeTensor(..., size=(4, 4), requires_grad=True)], [FakeTensor(..., size=(4, 4))])
         phs = pytree.tree_map(lambda _: fx.PH, args)  # type: ignore[attr-defined]
         fx_tracer = PythonKeyTracer()
         fake_tensor_mode: Any = nullcontext()
@@ -798,6 +799,7 @@ def make_fx(f,
         else:
             func = f
 
+        # breakpoint()
         # We disable the autocast cache as the autocast cache causes type conversions on parameters to
         # check a cache, which introduces untracked tensors into the graph
         #
@@ -806,7 +808,7 @@ def make_fx(f,
         # thus irrelevant to any external functional trace.
         with decompose(decomposition_table), fake_tensor_mode, python_dispatcher_mode, pre_dispatch_mode, proxy_function_mode, \
              sym_mode, proxy_mode, disable_autocast_cache(), disable_proxy_modes_tracing(enable_current=True):
-            t = dispatch_trace(wrap_key(func, args, fx_tracer, pre_dispatch), tracer=fx_tracer, concrete_args=tuple(phs))
+            t = dispatch_trace(wrap_key(func, args, fx_tracer, pre_dispatch), tracer=fx_tracer, concrete_args=tuple(phs))       # t is graph module
 
         # TODO: kind of a bad way to do it, should maybe figure out a better way
         if tracing_mode == "symbolic":

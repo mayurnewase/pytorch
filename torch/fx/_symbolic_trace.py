@@ -721,6 +721,7 @@ class Tracer(TracerBase):
 
             A ``Graph`` representing the semantics of the passed-in ``root``.
         """
+        # breakpoint()
         global _is_fx_tracing_flag
         old_is_fx_tracing_flag = _is_fx_tracing_flag
         _is_fx_tracing_flag = True
@@ -762,12 +763,12 @@ class Tracer(TracerBase):
                 for k, v in m.named_children():
                     collect_tensor_attrs(v, prefix_atoms + [k])
 
-            collect_tensor_attrs(self.root, [])
+            collect_tensor_attrs(self.root, [])     # doesnt do anything as self.root is empty nn module
 
             assert isinstance(fn, FunctionType)
 
             fn_globals = fn.__globals__  # run before it gets patched
-            fn, args = self.create_args_for_root(
+            fn, args = self.create_args_for_root(       # lambda, [Proxy(arg0_1), Proxy(arg1_1)]
                 fn, isinstance(root, torch.nn.Module), concrete_args
             )
 
@@ -811,10 +812,15 @@ class Tracer(TracerBase):
                     _autowrap_check(
                         patcher, module.__dict__, self._autowrap_function_ids
                     )
+                
+                # till here graph had 2 nodes of arguments
+                # this adds sin and output nodes by using python key tracer's tensor map dictionary, don't know how its populated in the first place
+                # breakpoint()
+                create_node_args = self.create_arg(fn(*args))           # DEBUG: this calls our function to fill nodes of the fx graph
                 self.create_node(
                     "output",
                     "output",
-                    (self.create_arg(fn(*args)),),
+                    (create_node_args,),
                     {},
                     type_expr=fn.__annotations__.get("return", None),
                 )

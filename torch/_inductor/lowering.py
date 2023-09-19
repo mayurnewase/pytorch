@@ -272,7 +272,15 @@ def _register_lowering(
         if unpacked:
             args = [args]
 
-        out = decomp_fn(*args, **kwargs)
+        out = decomp_fn(*args, **kwargs) # DEBUG: repro: TensorBox(
+#   ReinterpretView(
+#     StorageBox(
+#       InputBuffer(name='tangents_1', layout=FixedLayout('cpu', torch.float32, size=[2, 2, (s2//2)], stride=[2*((s2//2)), (s2//2), 1]))
+#     ),
+#     FixedLayout('cpu', torch.float32, size=[2, (s2//2)], stride=[(s2//2), 1]),
+#     origins={select_4}
+#   )
+# )
         validate_ir(out)
 
         return out

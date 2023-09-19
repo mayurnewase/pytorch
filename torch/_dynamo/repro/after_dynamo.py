@@ -54,6 +54,8 @@ def wrap_backend_debug(unconfigured_compiler_fn, compiler_name: str):
     level, e.g., it is useful for minifying issues related to Aot Autograd
     tracing.  If an error is found, we minify and save the minified repro in
     repro.tar.gz.
+
+    DEBUG: this is not used, so else block just calls compiler_fn with our gm and inputs
     """
 
     @functools.wraps(unconfigured_compiler_fn)

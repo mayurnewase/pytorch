@@ -734,8 +734,8 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         for block in reversed(tx.block_stack):
             block.exit(tx)
 
-        self.cleanup_graph()
-        tx.prune_dead_locals()
+        self.cleanup_graph()            # didnt do anything to the graph, so skip for now
+        tx.prune_dead_locals()          # didnt do anything to the graph, so skip for now
         stack_values = list(tx.stack)
         root = FakeRootModule(self.nn_modules)
         # Add all the local vars to the "stack" so restore at the end
@@ -779,7 +779,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             self.add_output_instructions(random_calls_instructions)
 
         if (
-            stack_values
+            stack_values   # [TensorVariable()]
             and all(
                 not isinstance(v, (UnspecializedPythonVariable, NumpyNdarrayVariable))
                 for v in stack_values
@@ -792,7 +792,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             # optimization to generate better code in a common case
             self.add_output_instructions(
                 self.compile_and_call_fx_graph(tx, list(reversed(stack_values)), root)
-                + [create_instruction("UNPACK_SEQUENCE", arg=len(stack_values))]
+                + [create_instruction("UNPACK_SEQUENCE", arg=len(stack_values))]        # DEBUG: don't know why this is needed
             )
         else:
             graph_output_var = self.new_var("graph_out")
@@ -884,22 +884,26 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         """
         Generate code from self.graph and return the Instruction()s to
         call that generated code.
+        args
+            tx: InstructionTranslator object
+            rv: [TensorVariable()]
+            root: FakeRootModule
         """
         from .decorators import disable
 
         assert isinstance(rv, list)
         assert isinstance(root, FakeRootModule)
         for output in rv:
-            self.guards.update(output.guards)
+            self.guards.update(output.guards)           # dont know whats guards
 
-        self.create_node(
-            "output",
-            "output",
+        self.create_node(                               # DEBUG: skip for now, check later
+            "output",                                      # this aded "output" node in self.graph.nodes list
+            "output",                                       # now graph has these nodes -> ['placeholder', 'placeholder', 'call_function', 'output']
             (self.current_tracer.create_arg(tuple(x.as_proxy() for x in rv)),),
             {},
         )
         self.remove_unused_graphargs()
-        ncalls = count_calls(self.graph)
+        ncalls = count_calls(self.graph)            # count the "call_function" op in graph nodes
         counters["stats"]["calls_captured"] += ncalls
 
         # free a bit of memory
@@ -915,15 +919,109 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             "%s", LazyString(lambda: self.get_graph_sizes_log_str(name))
         )
 
-        compiled_fn = self.call_user_compiler(gm)
-        compiled_fn = disable(compiled_fn)
+        breakpoint()
+        compiled_fn = self.call_user_compiler(gm)       # DEBUG: how does it compile our graph of instructions -> python bytecode -> nodes -> CompiledFXGraph -> adds 2 wrappers on it for runtime call
+        # compiled_fn is 2 (forward and runtime_wrapper) wrappers for CompiledFXGraph's compiled_artifact call
 
+        compiled_fn = disable(compiled_fn)      # disable torch dynamo
+
+        breakpoint()
         counters["stats"]["unique_graphs"] += 1
-        self.install_global(name, compiled_fn)
+        self.install_global(name, compiled_fn)          # DEBUG: added {"compiled_fn0": compiled_fn} to scope dictionary which alreay contains bunch of values -> find out who populayted it
 
         cg = PyCodegen(tx)
         cg.make_call_generated_code(name)
-        return cg.get_instructions()
+        return cg.get_instructions()        # which just returns the _output list of cg which was populated in above call
+        """
+            instructions returned above
+            [
+                Instruction(
+                    opcode=116,
+                    opname='LOAD_GLOBAL',
+                    arg=False,
+                    argval='__compiled_fn_0',
+                    offset=None,
+                    starts_line=None,
+                    is_jump_target=False,
+                    positions=None,
+                    target=None,
+                    exn_tab_entry=None
+                ),
+                Instruction(
+                    opcode=124,
+                    opname='LOAD_FAST',
+                    arg=None,
+                    argval='x',
+                    offset=None,
+                    starts_line=None,
+                    is_jump_target=False,
+                    positions=None,
+                    target=None,
+                    exn_tab_entry=None
+                ),
+                Instruction(
+                    opcode=106,
+                    opname='LOAD_ATTR',
+                    arg=None,
+                    argval='size',
+                    offset=None,
+                    starts_line=None,
+                    is_jump_target=False,
+                    positions=None,
+                    target=None,
+                    exn_tab_entry=None
+                ),
+                Instruction(
+                    opcode=100,
+                    opname='LOAD_CONST',
+                    arg=None,
+                    argval=0,
+                    offset=None,
+                    starts_line=None,
+                    is_jump_target=False,
+                    positions=None,
+                    target=None,
+                    exn_tab_entry=None
+                ),
+                Instruction(
+                    opcode=131,
+                    opname='CALL_FUNCTION',
+                    arg=1,
+                    argval=<class 'torch._dynamo.bytecode_transformation._NotProvided'>,
+                    offset=None,
+                    starts_line=None,
+                    is_jump_target=False,
+                    positions=None,
+                    target=None,
+                    exn_tab_entry=None
+                ),
+                Instruction(
+                    opcode=124,
+                    opname='LOAD_FAST',
+                    arg=None,
+                    argval='x',
+                    offset=None,
+                    starts_line=None,
+                    is_jump_target=False,
+                    positions=None,
+                    target=None,
+                    exn_tab_entry=None
+                ),
+                Instruction(
+                    opcode=131,
+                    opname='CALL_FUNCTION',
+                    arg=2,
+                    argval=<class 'torch._dynamo.bytecode_transformation._NotProvided'>,
+                    offset=None,
+                    starts_line=None,
+                    is_jump_target=False,
+                    positions=None,
+                    target=None,
+                    exn_tab_entry=None
+                )
+            ]
+        """
+
 
     @property
     def placeholders(self) -> List[fx.Node]:
@@ -943,7 +1041,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
     def call_user_compiler(self, gm: fx.GraphModule) -> CompiledFn:
         tot = 0
         placeholders = []
-        for node in gm.graph.nodes:
+        for node in gm.graph.nodes:     # [s0, l_x_, sin, output] => ops => ['placeholder', 'placeholder', 'call_function', 'output']
             if node.op in ("call_function", "call_method", "call_module"):
                 tot += 1
             if node.op == "placeholder":
@@ -958,7 +1056,7 @@ class OutputGraph(Checkpointable[OutputGraphState]):
 
         try:
             name = (
-                self.compiler_fn.__name__
+                self.compiler_fn.__name__           # this is inductor compiler => wrap_backend_debug.<locals>.debug_wrapper
                 if hasattr(self.compiler_fn, "__name__")
                 else ""
             )
@@ -967,7 +1065,9 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             if config.verify_correctness:
                 compiler_fn = WrapperBackend(compiler_fn)
 
-            compiled_fn = compiler_fn(gm, self.example_inputs())
+            compiled_fn = compiler_fn(gm, self.example_inputs())            # DEBUG: here our inductor gets the graph to optimize baby, lets debug inductor now.
+            # DEBUG: compiled_fn is 2 wrappers for CompiledFXGraph
+
             _step_logger()(logging.INFO, f"done compiler function {name}")
             assert callable(compiled_fn), "compiler_fn did not return callable"
         except Exception as e:
@@ -1046,6 +1146,24 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         self.should_exit = True
 
     def install_global(self, name, value) -> None:
+        """
+            name: compiled_fn0
+            value: compiled_fn
+            global_scope: {'__name__': '__main__', '__doc__': None, '__package__': None, 
+                '__loader__': <_frozen_importlib_external.SourceFileLoader object at 0x7f58f8821060>, 
+                '__spec__': None, '__annotations__': {}, '__builtins__': <module 'builtins' (built-in)>,
+                '__file__': '/home/mayur/projects/pytorch/examples/105524/compile_demo.py', 
+                '__cached__': None, 'List': typing.List, 'Tuple': typing.Tuple, 
+                'Optional': typing.Optional, 'overload': <function overload at 0x7f58f877d240>, 
+                'Union': typing.Union, 'cast': <function cast at 0x7f58f877cca0>, 
+                'torch': <module 'torch' from '/home/mayur/projects/pytorch/torch/__init__.py'>, 
+                'np': <module 'numpy' from '/home/mayur/miniconda3/envs/torch/lib/python3.10/site-packages/numpy/__init__.py'>, 
+                'time': <module 'time' (built-in)>, 'optim': <module 'torch.optim' from '/home/mayur/projects/pytorch/torch/optim/__init__.py'>,
+                    'Parameter': <class 'torch.nn.parameter.Parameter'>, 'foo': <function foo at 0x7f58f8963d90>,
+                    'opt_foo1': <function foo at 0x7f58dcf6de10>, 'a': tensor([[1., 1.],
+                [2., 2.]]), 'b': tensor([[3., 3.],
+                [4., 4.]])}
+        """
         self.cleanups.append(CleanupHook.create(self.global_scope, name, value))
 
     def cleanup(self) -> None:

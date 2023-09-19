@@ -401,7 +401,7 @@ class SchedulerNode(BaseSchedulerNode):
             self._body,
         ) = node.simplify_and_reorder()
 
-        self.group = (node.get_device(), group_fn(self._sizes))
+        self.group = (node.get_device(), group_fn(self._sizes)) # DEBUG: what is this? its used in codegen but don;t know what is this
 
         if self.is_template():
             self.set_read_writes(node.normalized_read_writes())
@@ -438,6 +438,9 @@ class SchedulerNode(BaseSchedulerNode):
         return isinstance(self.node, ir.TemplateBuffer)
 
     def run(self, *index_vars):
+        """
+            index_vars = ([i0], []) don't know what that is, its type is sympy.Symbol
+        """
         self.mark_run()
         self.codegen(index_vars)
 
@@ -456,7 +459,7 @@ class SchedulerNode(BaseSchedulerNode):
         return var_ranges
 
     def codegen(self, index_vars):
-        var_ranges = self.ranges_from_index_vars(index_vars)
+        var_ranges = self.ranges_from_index_vars(index_vars)    # {i0: s0**2}
         try:
             with V.set_ops_handler(
                 SimplifyIndexing(V.get_ops_handler(), var_ranges)
@@ -743,19 +746,35 @@ class NodeUser:
 class Scheduler:
     @dynamo_timed
     def __init__(self, nodes):
+        """
+            [ComputedBuffer(name='buf0', layout=FixedLayout('cpu', torch.float32, size=[s0, s0], stride=[s0, 1]), data=Pointwise(
+            'cpu',
+            torch.float32,
+            def inner_fn(index):
+                i0, i1 = index
+                tmp0 = ops.load(arg1_1, i1 + i0 * s0)
+                tmp1 = ops.sin(tmp0)
+                return tmp1
+            ,
+            ranges=[s0, s0],
+            origin_node=sin,
+            origins={sin}
+            ))]
+        """
         super().__init__()
         self.backends = {}
+        # breakpoint()
 
         self.nodes = []
-        self.available_buffer_names = {
+        self.available_buffer_names = {     # {'arg0_1', 'arg1_1'}
             *V.graph.graph_inputs.keys(),
             *V.graph.constants.keys(),
         }
 
-        self.nodes = [self.create_scheduler_node(n) for n in nodes]
+        self.nodes = [self.create_scheduler_node(n) for n in nodes]     # [SchedulerNode(name='buf0')]
 
         # some new constants could have been created above
-        self.available_buffer_names.update(V.graph.constants.keys())
+        self.available_buffer_names.update(V.graph.constants.keys())    # doesn't do anything
         for node in self.nodes:
             node.prune_deps()
 
@@ -770,7 +789,7 @@ class Scheduler:
         # mutation_real_name: maps back to the original name for codegen
         self.mutation_renames = {}
 
-        self.compute_dependencies()
+        self.compute_dependencies()     # fills node.users array to [NodeUser(node=OUTPUT, can_inplace=False)]
         self.topological_sort_schedule()
         self.compute_predecessors()
         self.dead_node_elimination()
@@ -1065,7 +1084,7 @@ class Scheduler:
 
         buffer_names_grouping = collections.defaultdict(list)
         for node in self.nodes:
-            for buf in node.used_buffer_names():
+            for buf in node.used_buffer_names():        # {'arg1_1', 'buf0'}
                 buffer_names_grouping[buf].append(node)
         for node_grouping in buffer_names_grouping.values():
             check_all_pairs(node_grouping)

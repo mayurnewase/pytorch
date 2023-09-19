@@ -2620,6 +2620,8 @@ class ExternKernel(InputsKernel):
 
     @staticmethod
     def copy_input(x):
+        print("copy_input ", x, type(x))
+        # breakpoint()
         pw = Pointwise.create(
             device=x.get_device(),
             dtype=x.get_dtype(),
@@ -4532,16 +4534,19 @@ class LoopBody:
         assert self.indexing is not None
         return self.indexing[name]
 
-    def __call__(self, *indices):
+    def __call__(self, *indices):   # indices =  ([i0], []), var_ranges = {z0: s0**2}
+        """
+            got called twice, when I was debugging c++ code generation
+        """
         index = list(itertools.chain(*indices))
         assert len(index) == len(self.var_ranges), (index, self.var_ranges)
         assert all(v not in self.var_ranges for v in index)
-        replacements = dict(zip(self.var_ranges.keys(), index))
+        replacements = dict(zip(self.var_ranges.keys(), index))     # {z0: i0}
         self.indexing = {
             name: sympy_subs(expr, replacements)
             for name, expr in self.indexing_exprs.items()
         }
-        result = self.root_block()
+        result = self.root_block()  # result = "tmp2" on first call, None on second call
         self.indexing = None
         return result
 
@@ -4659,8 +4664,8 @@ class LoopBodyBlock:
 
     def __call__(self):
         graph = self.graph
-        submodules = self.body.submodules
-
+        submodules = self.body.submodules       # {'get_index': <bound method LoopBody.get_index of <torch._inductor.ir.LoopBody object at 0x7f6c757212d0>>}
+        # breakpoint()
         return InterpreterShim(graph, submodules).run(V.get_ops_handler())
 
     def debug_str(self, name="block"):

@@ -1288,8 +1288,8 @@ class CppKernel(Kernel):
         return V.graph.sizevars.size_hint(sympy_product(self.call_ranges))
 
     def codegen_loops_impl(self, loop_nest, code, worksharing):
-        threads = parallel_num_threads()
-        par_depth = self.decide_parallel_depth(
+        threads = parallel_num_threads()        # 8
+        par_depth = self.decide_parallel_depth( # 0
             self.call_ranges[: loop_nest.max_parallel_depth()], threads
         )
         with contextlib.ExitStack() as stack:
@@ -1329,8 +1329,8 @@ class CppKernel(Kernel):
             def gen_loops(loops: List[LoopLevel], in_reduction=False):
                 with contextlib.ExitStack() as stack_outer:
                     if loops:
-                        loop = loops[0]
-                        if loop.is_reduction() and not in_reduction:
+                        loop = loops[0]  
+                        if loop.is_reduction() and not in_reduction:    # both false
                             reduction_prefix = get_reduction_code_buffer(
                                 loops, is_suffix=False
                             )
@@ -1343,6 +1343,22 @@ class CppKernel(Kernel):
                     for loop in loops:
                         gen_loop(loop, in_reduction)
 
+                    """
+                        till here code is 
+                            {
+                                for (long i0 = static_cast<long>(0L); i0 < static_cast<long>(16L * (at::native::div_floor_integer((static_cast<long>(ks0 * ks0)), 16L))); i0 += static_cast<long>(16L)) {
+                                    auto tmp0 = at::vec::Vectorized<float>::loadu(in_ptr0 + static_cast<long>(i0));
+                                    auto tmp1 = tmp0.sin();
+                                    tmp1.store(out_ptr0 + static_cast<long>(i0));
+                                }
+                            #pragma omp simd simdlen(8)
+                                for (long i0 = static_cast<long>(16L * (at::native::div_floor_integer((static_cast<long>(ks0 * ks0)), 16L))); i0 < static_cast<long>(static_cast<long>(ks0 * ks0)); i0 += static_cast<long>(1L)) {
+                                    auto tmp0 = in_ptr0[static_cast<long>(i0)];
+                                    auto tmp1 = std::sin(tmp0);
+                                    out_ptr0[static_cast<long>(i0)] = tmp1;
+                                }
+                            }
+                    """
                     if loops:
                         loop = loops[0]
                         if loop_nest.is_reduction_only() and loop.parallel:
@@ -2512,7 +2528,15 @@ class CppKernelProxy(CppKernel):
                 _legalize_bf16(body)
 
     def codegen_nodes(self, nodes):
+        """
+            DEBUG Q: what is tilling
+            DEBUG Q: why 2 loops to calculate sin
+
+            nodes = [SchedulerNode(name='buf0')]
+        """
         # Legalize BF16 node by adding to_dtype explicitly
+        # breakpoint()
+
         self.legalize_bf16(nodes)
         self.data_type_propagation(nodes)
 
@@ -2522,7 +2546,10 @@ class CppKernelProxy(CppKernel):
             else torch.float
         )
 
-        kernel_group = self.kernel_group
+        kernel_group = self.kernel_group    # <torch._inductor.codegen.cpp.KernelGroup
+
+        # group = (s0**2,)
+        # reduction_group = ()
         _, (group, reduction_group) = max(
             nodes, key=lambda x: int(x.is_reduction())
         ).group
@@ -2540,7 +2567,7 @@ class CppKernelProxy(CppKernel):
                 return kernel
 
         def run(kernel):
-            vars, reduction_vars = kernel.set_ranges(group, reduction_group)
+            vars, reduction_vars = kernel.set_ranges(group, reduction_group)    # [i0], [0] # group = (s0**2) reduction_group = ()
             in_suffix = False
             for node in nodes:
                 if node.group[1] in [
@@ -2548,7 +2575,7 @@ class CppKernelProxy(CppKernel):
                     (group + reduction_group, ()),
                 ]:
                     assert not in_suffix
-                    node.run(vars, reduction_vars)
+                    node.run(vars, reduction_vars)      # populates self._body object with the loop data
                 else:
                     in_suffix = True
                     assert node.group[1] == (
@@ -2559,26 +2586,32 @@ class CppKernelProxy(CppKernel):
                     with kernel.write_to_suffix():
                         node.run(vars, ())
 
-        scalar_kernel = codegen_kernel(CppKernel)
-        self.loop_nest = LoopNestWithSplit.build(scalar_kernel)
+        scalar_kernel = codegen_kernel(CppKernel)       # scalar means simplest code which goes through data serially in loop
+        # breakpoint()
+        self.loop_nest = LoopNestWithSplit.build(scalar_kernel)     # I guess this creates 2 different loops
+        # LoopNestWithSplit(root=[LoopLevel(var=i0, size=ks0**2, offset=0, steps=1, parallel=0, simd_omp=False, picked_vec_isa=VecAVX512(__hash__=<function VecISA.__hash__ at 0x7fde37bfb1c0>), simd_nelements=16, simd_vec=False, collapsed=False, reduction_var_map=None, parent=None, inner=[], kernel=<torch._inductor.codegen.cpp.CppKernel object at 0x7fde5b6687f0>)], kernel=1)
 
         if not self.picked_vec_isa:
             return
-
+        # DEBUG: so all below is optional, depending on the vec_isa cpu supports
+        
         def select_tiling_indices():
             all_index = []
             for node in nodes:
-                rw = dependencies.extract_read_writes(node._body, *node._sizes)
-                all_index += [dep.index for dep in itertools.chain(rw.reads, rw.writes)]
+                rw = dependencies.extract_read_writes(node._body, *node._sizes)     # this compiles 1 fx graph
+                # ReadWrites(reads={MemoryDep('arg1_1', d0, {d0: s0**2})}, writes={MemoryDep('buf0', d0, {d0: s0**2})}, index_exprs=set(), range_vars=[d0], var_ranges={d0: s0**2}, op_counts=Counter({'load': 1, 'sin': 1, 'store': 1}))
+
+                # breakpoint()
+                all_index += [dep.index for dep in itertools.chain(rw.reads, rw.writes)]    # [d0, d0] type = sympy.core.symbol.Symbol
             contig_vars = set()
             contig_vars_list = []
             non_contig_stride_const = set()
             non_contig_stride_other = set()
             for index in all_index:
-                for var in index.free_symbols:
+                for var in index.free_symbols:              # {d0}
                     if not re.search(r"^d\d+$", var.name):
                         continue
-                    stride = stride_at(var, index)
+                    stride = stride_at(var, index)          # 1
                     if stride == 1:
                         contig_vars.add(int(var.name[1:]))
                         contig_vars_list.append(int(var.name[1:]))
@@ -2586,6 +2619,10 @@ class CppKernelProxy(CppKernel):
                         non_contig_stride_const.add(int(var.name[1:]))
                     else:
                         non_contig_stride_other.add(int(var.name[1:]))
+            
+            # contig_vars = {0}
+            # contig_vars_list = [0, 0]
+
             contig_only = (
                 contig_vars - non_contig_stride_const - non_contig_stride_other
             )
@@ -2593,7 +2630,7 @@ class CppKernelProxy(CppKernel):
                 # no contiguous vars
                 return [len(self.itervars) - 1]
             if contig_only:
-                return sorted(contig_only)[-1:]
+                return sorted(contig_only)[-1:]  # {0}
             contig_and_const_stride = (
                 contig_vars & non_contig_stride_const
             ) - non_contig_stride_other
@@ -2610,16 +2647,17 @@ class CppKernelProxy(CppKernel):
 
         def select_tiling(dtype: torch.dtype = torch.float):
             # TODO(jgong5): support alternative tiling factors and data types
-            tiling_factor = self.picked_vec_isa.nelements(dtype=dtype)
-            tiling_indices = select_tiling_indices()
+            tiling_factor = self.picked_vec_isa.nelements(dtype=dtype)   # 16
+            tiling_indices = select_tiling_indices()        # [0]
             if tiling_indices:
                 with CppVecKernelChecker(
-                    deepcopy(self.kernel_group.args),
+                    deepcopy(self.kernel_group.args),       # KernelArgs({'arg1_1': 'in_ptr0'}, {'buf0': 'out_ptr0'}, {}, {s0: 'ks0'})
                     parallel_num_threads(),
-                    tiling_factor,
-                    tiling_indices[-1],
+                    tiling_factor,                      # 16
+                    tiling_indices[-1],                 # 0
                 ) as vec_checker:
-                    run(vec_checker)
+                    run(vec_checker)             # DEBUG: is anyone gonna change the vec_checker.simd_vec boolean which was True in the init of this object?
+                # breakpoint()
                 if vec_checker.simd_vec:
                     if len(tiling_indices) == 1:
                         return [tiling_factor], tiling_indices
@@ -2631,13 +2669,18 @@ class CppKernelProxy(CppKernel):
         # But the generated scalar kernel has updated these global contexts. Hence, the other kernels
         # should not do this again to avoid context conflict. By now, we only control the
         # config.inplace_buffers. In the future, we could maintain more contexts.
+        
+        # DBEUG: this will give me vectorization and omp_simd and avx512 knowledge -> do this inside out...
+
         with torch._inductor.config.patch(inplace_buffers=False):
-            tiling_factors, tiling_indices = select_tiling(vec_dtype)
+            tiling_factors, tiling_indices = select_tiling(vec_dtype)           # [16], [0], vec_dtype = torch.float32
             assert len(tiling_factors) == len(tiling_indices)
             if len(tiling_indices) == 1:
                 main_loop, tail_loop = self.loop_nest.split_with_tiling(
                     tiling_indices[0], factor=tiling_factors[0]
                 )
+                # main_loop = LoopLevel(var=i0, size=16*((ks0**2//16)), offset=0, steps=16, parallel=0, simd_omp=False, picked_vec_isa=VecAVX512(__hash__=<function VecISA.__hash__ at 0x7fc74e7fb1c0>), simd_nelements=16, simd_vec=False, collapsed=False, reduction_var_map=None, parent=None, inner=[], kernel=None), 
+                # tail_loop = LoopLevel(var=i0, size=ks0**2, offset=16*((ks0**2//16)), steps=1, parallel=0, simd_omp=False, picked_vec_isa=VecAVX512(__hash__=<function VecISA.__hash__ at 0x7fc74e7fb1c0>), simd_nelements=16, simd_vec=False, collapsed=False, reduction_var_map=None, parent=None, inner=[], kernel=None)
                 main_loop.set_kernel(
                     codegen_kernel(
                         CppVecKernel, tiling_factors[0], tiling_indices[0], vec_dtype
@@ -2652,6 +2695,10 @@ class CppKernelProxy(CppKernel):
                 # if the nelements is 8(256bits), then the tail loop still could be vectorized
                 # as 4(128bits).
                 tail_loop.simd_nelements = tiling_factors[0] // 2
+
+                # main_loop = LoopLevel(var=i0, size=16*((ks0**2//16)), offset=0, steps=16, parallel=0, simd_omp=False, picked_vec_isa=VecAVX512(__hash__=<function VecISA.__hash__ at 0x7f1509b7f1c0>), simd_nelements=16, simd_vec=True, collapsed=False, reduction_var_map=None, parent=None, inner=[], kernel=<torch._inductor.codegen.cpp.CppVecKernel object at 0x7f15327d8400>)
+                # tail_loop = LoopLevel(var=i0, size=ks0**2, offset=16*((ks0**2//16)), steps=1, parallel=0, simd_omp=True, picked_vec_isa=VecAVX512(__hash__=<function VecISA.__hash__ at 0x7f1509b7f1c0>), simd_nelements=8, simd_vec=False, collapsed=False, reduction_var_map=None, parent=None, inner=[], kernel=<torch._inductor.codegen.cpp.CppKernel object at 0x7f152d53c7c0>)
+
             elif len(tiling_indices) == 2:
                 assert (
                     tiling_indices[1] == len(self.itervars) - 1
@@ -2721,6 +2768,7 @@ class CppScheduling:
         """
         Turn an set of pre-fused nodes into a C++ kernel.
         """
+        # breakpoint()
         kernel_group = self.kernel_group
 
         cpp_kernel_proxy = CppKernelProxy(kernel_group)
@@ -2851,7 +2899,7 @@ class WorkSharing:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stack.__exit__(exc_type, exc_val, exc_tb)
 
-
+# generate 2 lines of loop, pragma omp and for(...) lines
 @dataclasses.dataclass
 class LoopLevel:
     var: sympy.Expr = None
@@ -2911,7 +2959,7 @@ class LoopLevel:
     def is_reduction(self):
         return bool(self.reduction_var_map)
 
-    def split_with_tiling(self, depth, factor):
+    def split_with_tiling(self, depth, factor):   # 0, 16
         def clone_inner():
             inner = []
             if self.inner:
@@ -3028,15 +3076,17 @@ class LoopNestWithSplit:
     @staticmethod
     def build(kernel: CppKernel):
         """Build a LoopNest with the given `kernel` as the leaf"""
-        itervars = kernel.itervars
-        ranges = kernel.ranges
-        reduction_depth = kernel.reduction_depth
+        itervars = kernel.itervars      # [i0] => loops iterator variable
+        ranges = kernel.ranges          # [ks0 ** 2] => loops range
+        reduction_depth = kernel.reduction_depth       # 1
 
         root: List[LoopLevel] = []
         levels: List[LoopLevel] = root
         loop: LoopLevel = None
         for loop_idx, (var, size) in enumerate(zip(itervars, ranges)):
             loop = LoopLevel(var, size, parent=loop)
+            # LoopLevel(var=i0, size=ks0**2, offset=0, steps=1, parallel=0, simd_omp=False, picked_vec_isa=VecAVX512(__hash__=<function VecISA.__hash__ at 0x7fde37bfb1c0>), simd_nelements=16, simd_vec=False, collapsed=False, reduction_var_map=None, parent=None, inner=[], kernel=None)
+           
             if loop_idx >= reduction_depth:
                 loop.reduction_var_map = kernel.reduction_var_map.copy()
             levels.append(loop)
@@ -3094,14 +3144,15 @@ class LoopNestWithSplit:
             loops = loops[0].inner
             loops[0].collapsed = True
 
-    def split_with_tiling(self, depth, factor):
+    def split_with_tiling(self, depth, factor):     # 0, 16
         """
         Split the loop into main and tail loops at given `depth` so that the range
         of the main loop has range `floor_div(range, factor) * factor` and
         the tail loop handles the remainder. The main loop is tiled
         according to the `factor`.
         """
-        loops = self.get_loops_at(depth)
+        # breakpoint()
+        loops = self.get_loops_at(depth)            # same as root => [LoopLevel(var=i0, size=ks0**2, offset=0, steps=1, parallel=0, simd_omp=False, picked_vec_isa=VecAVX512(__hash__=<function VecISA.__hash__ at 0x7f7cc59171c0>), simd_nelements=16, simd_vec=False, collapsed=False, reduction_var_map=None, parent=None, inner=[], kernel=<torch._inductor.codegen.cpp.CppKernel object at 0x7f7ced65f880>)]
         assert len(loops) == 1
         split_loops = loops[0].split_with_tiling(0, factor)
         if depth == 0:

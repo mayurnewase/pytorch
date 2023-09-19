@@ -225,6 +225,8 @@ def default_partition(
     joint_module: fx.GraphModule, _joint_inputs, *, num_fwd_outputs
 ) -> Tuple[fx.GraphModule, fx.GraphModule]:
     """
+    # it give separate forward and backward graph modules.
+    
     Partitions the :attr:`joint_module` in a manner that closely resembles the
     behavior observed in the original ``.forward()`` and ``.backward()`` of the
     callable, i.e., the resulting forward graph contains those operators that
@@ -252,7 +254,7 @@ def default_partition(
     primal_inputs = list(filter(_is_primal, joint_module.graph.nodes))
     fwd_seed_offset_inputs = list(filter(_is_fwd_seed_offset, joint_module.graph.nodes))
     inputs = primal_inputs + fwd_seed_offset_inputs
-    fwd_outputs, bwd_outputs = _extract_fwd_bwd_outputs(joint_module, num_fwd_outputs=num_fwd_outputs)
+    fwd_outputs, bwd_outputs = _extract_fwd_bwd_outputs(joint_module, num_fwd_outputs=num_fwd_outputs) # [cos_1]
     forward_only_graph = _extract_graph_with_inputs_outputs(joint_module.graph, inputs, fwd_outputs)
     forward_node_names = {node.name for node in forward_only_graph.nodes if node.op != 'output'}
     saved_values = []

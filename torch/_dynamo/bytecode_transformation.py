@@ -1022,17 +1022,31 @@ def transform_code_object(code, transformations, safe=False):
     code_options = {k: getattr(code, k) for k in keys}
     assert len(code_options["co_varnames"]) == code_options["co_nlocals"]
 
-    instructions = cleaned_instructions(code, safe)
+    instructions = cleaned_instructions(code, safe)     # what does it clean? => 
     propagate_line_nums(instructions)
 
     transformations(instructions, code_options)
-    return clean_and_assemble_instructions(instructions, keys, code_options)[1]
+    return clean_and_assemble_instructions(instructions, keys, code_options)[1]     #DEBUG: convert's pytorch's Instuction to python's bytecode
 
 
 def clean_and_assemble_instructions(
     instructions: List[Instruction], keys: List[str], code_options: Dict[str, Any]
 ) -> Tuple[List[Instruction], types.CodeType]:
     # also implicitly checks for no duplicate instructions
+    """
+        convert pytorch's Instruction list to actual python byte code
+        for compile_demo script this was generated
+        
+8           0 LOAD_GLOBAL              2 (__compiled_fn_0)
+              2 LOAD_FAST                0 (x)
+              4 LOAD_ATTR                3 (size)
+              6 LOAD_CONST               1 (0)
+              8 CALL_FUNCTION            1
+             10 LOAD_FAST                0 (x)
+             12 CALL_FUNCTION            2
+             14 UNPACK_SEQUENCE          1
+             16 RETURN_VALUE
+    """
     check_inst_exn_tab_entries_valid(instructions)
 
     code_options["co_nlocals"] = len(code_options["co_varnames"])

@@ -562,6 +562,7 @@ class GraphLowering(torch.fx.Interpreter):
                 raise MissingOperatorWithoutDecomp(target, args, kwargs)
 
         try:
+            # breakpoint()
             out = lowerings[target](*args, **kwargs)
             return out
         except Exception as e:
@@ -846,8 +847,26 @@ class GraphLowering(torch.fx.Interpreter):
 
         self.init_wrapper_code()
 
-        self.scheduler = Scheduler(self.buffers)
+        """
+            buffers
+                [ComputedBuffer(name='buf0', layout=FixedLayout('cpu', torch.float32, size=[s0, s0], stride=[s0, 1]), 
+                    data=Pointwise(
+                    'cpu',
+                    torch.float32,
+                    def inner_fn(index):
+                        i0, i1 = index
+                        tmp0 = ops.load(arg1_1, i1 + i0 * s0)
+                        tmp1 = ops.sin(tmp0)
+                        return tmp1
+                    ,
+                    ranges=[s0, s0],
+                    origin_node=sin,
+                    origins={sin}
+                ))]
+        """
+        self.scheduler = Scheduler(self.buffers)        # DEBUG: does lot of things with nodes like fusion etc..
         assert self.scheduler is not None  # mypy can't figure this out
+        breakpoint()
         self.scheduler.codegen()
         assert self.wrapper_code is not None
         return self.wrapper_code.generate()
@@ -896,8 +915,82 @@ class GraphLowering(torch.fx.Interpreter):
     @dynamo_timed
     def compile_to_module(self):
         from .codecache import PyCodeCache
-
+        breakpoint()
         code, linemap = self.codegen()
+        breakpoint()
+        # exit()
+        """
+        linemap = [(54, sin)]
+        code = is below
+
+from ctypes import c_void_p, c_long
+import torch
+import math
+import random
+import os
+import tempfile
+from math import inf, nan
+from torch._inductor.hooks import run_intermediate_hooks
+from torch._inductor.utils import maybe_profile
+
+from torch import empty_strided, as_strided, device
+from torch._inductor.codecache import AsyncCompile
+from torch._inductor.select_algorithm import extern_kernels
+
+aten = torch.ops.aten
+assert_size_stride = torch._C._dynamo.guards.assert_size_stride
+async_compile = AsyncCompile()
+
+cpp_fused_sin_0 = async_compile.cpp('''
+#include "/tmp/torchinductor_mayur/zr/czrrhd67iy62iqdam5uwroq4ibq3i5oo4yzl6euetoa7k25vfk35.h"
+extern "C" void kernel(const float* in_ptr0,
+                       float* out_ptr0,
+                       const long ks0)
+{
+    {
+        for(long i0=static_cast<long>(0L); i0<static_cast<long>(16L*(at::native::div_floor_integer((static_cast<long>(ks0*ks0)), 16L))); i0+=static_cast<long>(16L))
+        {
+            auto tmp0 = at::vec::Vectorized<float>::loadu(in_ptr0 + static_cast<long>(i0));
+            auto tmp1 = tmp0.sin();
+            tmp1.store(out_ptr0 + static_cast<long>(i0));
+        }
+        #pragma omp simd simdlen(8) 
+        for(long i0=static_cast<long>(16L*(at::native::div_floor_integer((static_cast<long>(ks0*ks0)), 16L))); i0<static_cast<long>(static_cast<long>(ks0*ks0)); i0+=static_cast<long>(1L))
+        {
+            auto tmp0 = in_ptr0[static_cast<long>(i0)];
+            auto tmp1 = std::sin(tmp0);
+            out_ptr0[static_cast<long>(i0)] = tmp1;
+        }
+    }
+}
+''')
+
+async_compile.wait(globals())
+del async_compile
+
+def call(args):
+    arg0_1, arg1_1 = args
+    args.clear()
+    s0 = arg0_1
+    assert_size_stride(arg1_1, (s0, s0), (s0, 1))
+    buf0 = empty_strided((s0, s0), (s0, 1), device='cpu', dtype=torch.float32)
+    cpp_fused_sin_0(c_void_p(arg1_1.data_ptr()), c_void_p(buf0.data_ptr()), c_long(s0))
+    del arg1_1
+    return (buf0, )
+
+def benchmark_compiled_module(times=10, repeat=10):
+    from torch._dynamo.testing import rand_strided
+    from torch._inductor.utils import print_performance
+    arg0_1 = 2
+    arg1_1 = rand_strided((2, 2), (2, 1), device='cpu', dtype=torch.float32)
+    return print_performance(lambda: call([arg0_1, arg1_1]), times=times, repeat=repeat)
+
+
+if __name__ == "__main__":
+    from torch._inductor.wrapper_benchmark import compiled_module_main
+    compiled_module_main('None', benchmark_compiled_module)
+        """
+
         linemap = [(line_no, node.stack_trace) for line_no, node in linemap]
         key, path = PyCodeCache.write(code)
         mod = PyCodeCache.load_by_key_path(key, path, linemap=linemap)

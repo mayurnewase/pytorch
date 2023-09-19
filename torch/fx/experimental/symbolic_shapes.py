@@ -2353,7 +2353,7 @@ Target Guards:
             # If we're not duck shaping, we always create a new symbol
             # Even if we're duck shaping, if we haven't seen this particular
             # value before, we also create a new symbol
-            sympy_expr = sympy.Symbol(f"s{len(self.var_to_val)}", positive=positive, integer=True)
+            sympy_expr = sympy.Symbol(f"s{len(self.var_to_val)}", positive=positive, integer=True) # DEBUG: this dumbshit generates s1, s2 variablas in tracing ?
             self.log.info("create_symbol %s = %s for %s", sympy_expr, val, source.name())
             self.counter["create_symbol"] += 1
             # We always associate vars to vals

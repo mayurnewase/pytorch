@@ -463,8 +463,59 @@ class WrapperCodeGen(CodeGen):
     def generate(self):
         result = IndentedBuffer()
         result.splice(self.header)
+        """
+            result is IndentedBuffer with code
 
-        out_names = V.graph.get_output_names()
+            from ctypes import c_void_p, c_long
+            import torch
+            import math
+            import random
+            import os
+            import tempfile
+            from math import inf, nan
+            from torch._inductor.hooks import run_intermediate_hooks
+            from torch._inductor.utils import maybe_profile
+
+            from torch import empty_strided, as_strided, device
+            from torch._inductor.codecache import AsyncCompile
+            from torch._inductor.select_algorithm import extern_kernels
+
+            aten = torch.ops.aten
+            assert_size_stride = torch._C._dynamo.guards.assert_size_stride
+            async_compile = AsyncCompile()
+
+            cpp_fused_sin_0 = async_compile.cpp('''
+            #include "/tmp/torchinductor_mayur/zr/czrrhd67iy62iqdam5uwroq4ibq3i5oo4yzl6euetoa7k25vfk35.h"
+            extern "C" void kernel(const float* in_ptr0,
+                            float* out_ptr0,
+                            const long ks0)
+            {
+            {
+            for (long i0 = static_cast<long>(0L); i0 < static_cast<long>(16L * (at::native::div_floor_integer((static_cast<long>(ks0 * ks0)), 16L))); i0 += static_cast<long>(16L)) {
+                auto tmp0 = at::vec::Vectorized<float>::loadu(in_ptr0 + static_cast<long>(i0));
+                auto tmp1 = tmp0.sin();
+                tmp1.store(out_ptr0 + static_cast<long>(i0));
+            }
+            #pragma omp simd simdlen(8)
+            for (long i0 = static_cast<long>(16L * (at::native::div_floor_integer((static_cast<long>(ks0 * ks0)), 16L))); i0 < static_cast<long>(static_cast<long>(ks0 * ks0)); i0 += static_cast<long>(1L)) {
+                auto tmp0 = in_ptr0[static_cast<long>(i0)];
+                auto tmp1 = std::sin(tmp0);
+                out_ptr0[static_cast<long>(i0)] = tmp1;
+            }
+            }
+            }
+            ''')
+
+
+            wrapper_call is the variable declaration and above function call
+
+                buf0 = empty_strided((s0, s0), (s0, 1), device='cpu', dtype=torch.float32)
+                cpp_fused_sin_0(c_void_p(arg1_1.data_ptr()), c_void_p(buf0.data_ptr()), c_long(s0))
+                del arg1_1
+                return (buf0, )
+        """
+
+        out_names = V.graph.get_output_names()  # ['buf0']
         with contextlib.ExitStack() as stack:
             stack.enter_context(self.wrapper_call.indent())
             if config.profiler_mark_wrapper_call:

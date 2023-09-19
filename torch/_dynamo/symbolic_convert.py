@@ -681,7 +681,7 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
             TracingContext.set_current_loc(
                 self.f_code.co_filename, self.lineno, self.f_code.co_name
             )
-            getattr(self, inst.opname)(inst)
+            getattr(self, inst.opname)(inst)            # DEBUG: IMPORTANT: this is calling opname methods defined below like def LOAD_GLOBAL, def RETURN_VALUE
 
             return inst.opname != "RETURN_VALUE"
         except BackendCompilerFailed:
@@ -715,6 +715,7 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         return contextlib.nullcontext()
 
     def run(self):
+        # generates instruction to run the compiled graph
         with self.run_ctx_mgr():
             try:
                 self.output.push_tx(self)
@@ -1974,7 +1975,7 @@ class InstructionTranslator(InstructionTranslatorBase):
             f"torchdynamo start tracing {f_code.co_name} {code_options['co_filename']}:{code_options['co_firstlineno']}",
         )
         super().__init__(
-            output=OutputGraph(
+            output=OutputGraph(             # check this out later if needed
                 code_options,
                 compiler_fn,
                 self,
@@ -2142,6 +2143,7 @@ class InstructionTranslator(InstructionTranslatorBase):
         return cg.get_instructions()
 
     def RETURN_VALUE(self, inst):
+        # breakpoint()
         if self.output.count_calls() == 0 and not self.export:
             raise exc.SkipFrame("because no content in function call")
         self.instruction_pointer = None
@@ -2157,6 +2159,18 @@ class InstructionTranslator(InstructionTranslatorBase):
             ),
         )
         self.output.add_output_instructions([create_instruction("RETURN_VALUE")])
+        """
+        final self.output.output_instructions = 
+            [Instruction(opcode=116, opname='LOAD_GLOBAL', arg=False, argval='__compiled_fn_0', offset=None, starts_line=None, is_jump_target=False, positions=None, target=None, exn_tab_entry=None),
+            Instruction(opcode=124, opname='LOAD_FAST', arg=None, argval='x', offset=None, starts_line=None, is_jump_target=False, positions=None, target=None, exn_tab_entry=None),
+            Instruction(opcode=106, opname='LOAD_ATTR', arg=None, argval='size', offset=None, starts_line=None, is_jump_target=False, positions=None, target=None, exn_tab_entry=None),
+            Instruction(opcode=100, opname='LOAD_CONST', arg=None, argval=0, offset=None, starts_line=None, is_jump_target=False, positions=None, target=None, exn_tab_entry=None),
+            Instruction(opcode=131, opname='CALL_FUNCTION', arg=1, argval=<class 'torch._dynamo.bytecode_transformation._NotProvided'>, offset=None, starts_line=None, is_jump_target=False, positions=None, target=None, exn_tab_entry=None),
+            Instruction(opcode=124, opname='LOAD_FAST', arg=None, argval='x', offset=None, starts_line=None, is_jump_target=False, positions=None, target=None, exn_tab_entry=None),
+            Instruction(opcode=131, opname='CALL_FUNCTION', arg=2, argval=<class 'torch._dynamo.bytecode_transformation._NotProvided'>, offset=None, starts_line=None, is_jump_target=False, positions=None, target=None, exn_tab_entry=None),
+            Instruction(opcode=92, opname='UNPACK_SEQUENCE', arg=1, argval=<class 'torch._dynamo.bytecode_transformation._NotProvided'>, offset=None, starts_line=None, is_jump_target=False, positions=None, target=None, exn_tab_entry=None),
+            Instruction(opcode=83, opname='RETURN_VALUE', arg=None, argval=<class 'torch._dynamo.bytecode_transformation._NotProvided'>, offset=None, starts_line=None, is_jump_target=False, positions=None, target=None, exn_tab_entry=None)]
+        """
 
 
 class InliningInstructionTranslator(InstructionTranslatorBase):

@@ -62,12 +62,12 @@ def pre_grad_passes(gm, example_inputs):
 
     if config.pattern_matcher:
         lazy_init()
-        gm = fuse_fx(gm, example_inputs)
-        group_batch_fusion_pre_grad_passes(gm.graph)
-        for pattern_matcher_pass in pattern_matcher_passes:
+        gm = fuse_fx(gm, example_inputs)                # 
+        group_batch_fusion_pre_grad_passes(gm.graph) # doesn't do anything
+        for pattern_matcher_pass in pattern_matcher_passes:  # 4 in this list -> [<torch._inductor.pattern_matcher.PatternMatcherPass object at 0x7f0bdc241150>, <torch._inductor.pattern_matcher.PatternMatcherPass object at 0x7f0bdc242590>, <torch._inductor.pattern_matcher.PatternMatcherPass object at 0x7f0bdc2416f0>, <torch._inductor.pattern_matcher.PatternMatcherPass object at 0x7f0bdc242b30>]
             pattern_matcher_pass.apply(gm.graph)
 
-    stable_topological_sort(gm.graph)
+    stable_topological_sort(gm.graph)  # this doesn't modify the graph, so how the fuck does it sort it?
     gm.graph.lint()
     gm.recompile()
 
@@ -79,7 +79,7 @@ def fuse_fx(gm: torch.fx.GraphModule, example_inputs):
 
     fake_mode = detect_fake_mode(example_inputs)
 
-    gm = sink_cat_after_pointwise(gm)
+    gm = sink_cat_after_pointwise(gm) # didnt do anything, beside recompile the graph
     if config.permute_fusion and not is_cpu:
         # For linear permute fusion, we need to check input info to identify
         # and perform proper permutation/transpose
@@ -89,7 +89,7 @@ def fuse_fx(gm: torch.fx.GraphModule, example_inputs):
         gm = permute_matmul_fusion(gm)
 
     # make sure the autograd is disabled.
-    if torch.is_grad_enabled():
+    if torch.is_grad_enabled():         # this was enabled
         return gm
     if not is_cpu:
         return gm

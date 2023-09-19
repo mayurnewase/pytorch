@@ -250,7 +250,15 @@ class PyCodegen:
         return [self.create_load_attr(name) for name in names.split(".")]
 
     def load_function_name(self, fn_name, push_null, num_on_stack=0):
-        """Load the global fn_name on the stack num_on_stack down"""
+        """Load the global fn_name on the stack num_on_stack down
+        return output = [Instruction(opcode=116, opname='LOAD_GLOBAL',
+                                        arg=False, argval='__compiled_fn_0', offset=None,
+                                        starts_line=None, is_jump_target=False, 
+                                        positions=None, target=None, 
+                                        exn_tab_entry=None
+                                      )
+                        ]
+        """
         output = []
         if push_null and sys.version_info >= (3, 11):
             output.extend(
@@ -259,7 +267,7 @@ class PyCodegen:
         output.extend(
             [
                 self.create_load_global(fn_name, False, add=True),
-                *self.rot_n(num_on_stack + 1),
+                *self.rot_n(num_on_stack + 1),              # DEBUG: didnt do anything
             ]
         )
         return output
@@ -322,9 +330,21 @@ class PyCodegen:
 
     def make_call_generated_code(self, fn_name: str) -> List[Instruction]:
         """Call the generated code function stored in fn_name"""
-        self.extend_output(self.load_function_name(fn_name, True))
+        self.extend_output(self.load_function_name(fn_name, True))          # adds LOAD_GLOBAL = compiled_fn_0 instruction to self._output list
 
-        graphargs = self.tx.output.graphargs
+        graphargs = self.tx.output.graphargs                    # fake tensors used for compiling fx graph
+        """
+            graphargs = [
+                GraphArg(source=TensorPropertySource(base=LocalSource(local_name='x'), 
+                    prop=<TensorProperty.SIZE: 0>, idx=0), _example=s0, is_unspecialized=False, 
+                    fake_tensor=None, is_tensor=False, example_strong_ref=None),
+                GraphArg(source=LocalSource(local_name='x'), 
+                    _example=<torch.utils.weak.TensorWeakRef object at 0x7effc70538e0>, 
+                    is_unspecialized=False, fake_tensor=FakeTensor(..., size=(s0, s0)),
+                      is_tensor=True, example_strong_ref=None)
+                ]
+        """
+
         for arg in graphargs:
             if arg.is_unspecialized:
                 self.extend_output(
@@ -338,6 +358,100 @@ class PyCodegen:
             else:
                 self.extend_output(arg.load(self))
 
+        """
+            self._output till here
+                [
+                    Instruction(
+                        opcode=116,
+                        opname='LOAD_GLOBAL',
+                        arg=False,
+                        argval='__compiled_fn_0',
+                        offset=None,
+                        starts_line=None,
+                        is_jump_target=False,
+                        positions=None,
+                        target=None,
+                        exn_tab_entry=None
+                    ),
+                    Instruction(
+                        opcode=124,
+                        opname='LOAD_FAST',
+                        arg=None,
+                        argval='x',
+                        offset=None,
+                        starts_line=None,
+                        is_jump_target=False,
+                        positions=None,
+                        target=None,
+                        exn_tab_entry=None
+                    ),
+                    Instruction(
+                        opcode=106,
+                        opname='LOAD_ATTR',
+                        arg=None,
+                        argval='size',
+                        offset=None,
+                        starts_line=None,
+                        is_jump_target=False,
+                        positions=None,
+                        target=None,
+                        exn_tab_entry=None
+                    ),
+                    Instruction(
+                        opcode=100,
+                        opname='LOAD_CONST',
+                        arg=None,
+                        argval=0,
+                        offset=None,
+                        starts_line=None,
+                        is_jump_target=False,
+                        positions=None,
+                        target=None,
+                        exn_tab_entry=None
+                    ),
+                    Instruction(
+                        opcode=131,
+                        opname='CALL_FUNCTION',
+                        arg=1,
+                        argval=<class 'torch._dynamo.bytecode_transformation._NotProvided'>,
+                        offset=None,
+                        starts_line=None,
+                        is_jump_target=False,
+                        positions=None,
+                        target=None,
+                        exn_tab_entry=None
+                    ),
+                    Instruction(
+                        opcode=124,
+                        opname='LOAD_FAST',
+                        arg=None,
+                        argval='x',
+                        offset=None,
+                        starts_line=None,
+                        is_jump_target=False,
+                        positions=None,
+                        target=None,
+                        exn_tab_entry=None
+                    )
+                ]
+        """
+
+        """
+            below adds Instruction(
+                        opcode=131,
+                        opname='CALL_FUNCTION',
+                        arg=2,
+                        argval=<class 'torch._dynamo.bytecode_transformation._NotProvided'>,
+                        offset=None,
+                        starts_line=None,
+                        is_jump_target=False,
+                        positions=None,
+                        target=None,
+                        exn_tab_entry=None
+                    )
+            to above list
+            CALL_FUNCTION just calls the function on top of the stack with arg number of arguments, here it will call compiled_fn_0 with 2 arguments, which are loaded by LOAD_FAST instruction
+        """
         self.extend_output(create_call_function(len(graphargs), False))
 
     def load_import_from(self, module_name, object_name):

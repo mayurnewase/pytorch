@@ -99,16 +99,24 @@ class Interpreter:
     @compatibility(is_backward_compatible=True)
     def run(self, *args, initial_env : Optional[Dict[Node, Any]] = None, enable_io_processing : bool = True) -> Any:
         """
+        this gets called twice in demo script, but multiple times in repro script
+         from  /home/mayur/projects/pytorch/torch/_dynamo/output_graph.py with graph nodes [s0, l_x_, sin, output]
+         and when tracing fw_module with inference_compiler from create_aot_dispatcher_function with graph nodes [arg0_1, arg1_1, sin, output]
+
         Run `module` via interpretation and return the result.
+        runs through all nodes of the graph serially
+        called with fake inputs when fw partition is getting compiled in aot_dispatcher_function by fx_codegen_and_compile function
 
         Args:
             *args: The arguments to the Module to run, in positional order
+                while creating fx_graph these are fake tensors = (s0, _to_functional_tensor(FakeTensor(..., size=(s0, s0))))
             initial_env (Optional[Dict[Node, Any]]): An optional starting environment for execution.
                 This is a dict mapping `Node` to any value. This can be used, for example, to
                 pre-populate results for certain `Nodes` so as to do only partial evaluation within
                 the interpreter.
             enable_io_processing (bool): If true, we process the inputs and outputs with graph's process_inputs and
                 process_outputs function first before using them.
+                True
 
         Returns:
             Any: The value returned from executing the Module
@@ -125,7 +133,9 @@ class Interpreter:
                     desc=f"{self.name}: {str(list(self.module.graph.nodes)) if config.verbose_progress else ''}",
                     initial=0, position=0, leave=True, disable=config.disable_progress, delay=0)
 
-        for node in self.module.graph.nodes:
+        for node in self.module.graph.nodes:        # [s0, l_x_, sin, output] and while compiling fw_module this is [arg0_1, arg1_1, sin, output]
+                                                    # [ops, get_index, load, sin, get_index_1, store, output] when generating c++ loops
+                                                        # self.env after for all above nodes {ops: <torch._inductor.index_propagation.IndexPropagation object at 0x7f5f58c74ca0>, get_index: z0, load: IndexPropVar(value=Proxy(load), is_symbolic=False), sin: IndexPropVar(value=Proxy(sin), is_symbolic=False), get_index_1: z0, store: IndexPropVar(value=Proxy(store), is_symbolic=False), output: IndexPropVar(value=Proxy(store), is_symbolic=False)}
             pbar.update(1)
             if node in self.env:
                 # Short circuit if we have this value. This could
@@ -135,7 +145,32 @@ class Interpreter:
                 continue
 
             try:
-                self.env[node] = self.run_node(node)
+                # breakpoint()
+                self.env[node] = self.run_node(node)   # [a for a in self.module.graph.nodes]
+
+                """
+                    after tracing fw_module of compile_demo.py script this is the final self.env after the output node
+
+                    {
+                        arg0_1: s0, 
+                        sin: TensorBox(StorageBox(
+                            ComputedBuffer(name='buf0', layout=FixedLayout('cpu', torch.float32, size=[s0, s0], stride=[s0, 1]), data=Pointwise(
+                            'cpu',
+                            torch.float32,
+                            def inner_fn(index):
+                                i0, i1 = index
+                                tmp0 = ops.load(arg1_1, i1 + i0 * s0)
+                                tmp1 = ops.sin(tmp0)
+                                return tmp1
+                            ,
+                            ranges=[s0, s0],
+                            origin_node=sin,
+                            origins={sin}
+                            ))
+                            )), 
+                        output: None
+                    }
+                """
             except Exception as e:
                 if self.extra_traceback:
                     msg = f"While executing {node.format_node()}"
@@ -152,6 +187,7 @@ class Interpreter:
 
             if node.op == 'output':
                 output_val = self.env[node]
+                # breakpoint()
                 return self.module.graph.process_outputs(output_val) if enable_io_processing else output_val
 
     @compatibility(is_backward_compatible=True)
@@ -192,7 +228,7 @@ class Interpreter:
             args, kwargs = self.fetch_args_kwargs_from_env(n)
             assert isinstance(args, tuple)
             assert isinstance(kwargs, dict)
-            return getattr(self, n.op)(n.target, args, kwargs)
+            return getattr(self, n.op)(n.target, args, kwargs)      # calls the node operation
 
     # Main Node running APIs
     @compatibility(is_backward_compatible=True)

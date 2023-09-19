@@ -1391,7 +1391,7 @@ class FakeTensorMode(TorchDispatchMode):
         # and then afterwards wrapping them to a FakeTensor
         for run_impl_check, op_impl in op_implementations:
             if run_impl_check(func):
-                op_impl_out = op_impl(self, func, *args, **kwargs)
+                op_impl_out = op_impl(self, func, *args, **kwargs)   # DEBUG: this calls the function and gives out fake tensor with func output as data in it
                 if op_impl_out != NotImplemented:
                     return op_impl_out
 

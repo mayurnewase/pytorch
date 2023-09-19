@@ -1542,9 +1542,17 @@ class _TorchCompileInductorWrapper:
             self.config[attr_name] = val
 
     def __call__(self, model_, inputs_):
+        """
+            # this gets called from the fn we created in simple repro 
+            # in compile_demo script, this was called while JIT compiling bytecode for foo function with gm which wraps the fx graph with nodes and real inputs
+            args:
+                gm -> graph module with graph with nodes with op ['placeholder', 'placeholder', 'call_function', 'output']
+                inputs_ -> real inputs tensor in our script
+        """
+        
         from torch._inductor.compile_fx import compile_fx
-
-        return compile_fx(model_, inputs_, config_patches=self.config)
+        # breakpoint()                           # DEBUG: draw flow diagram till here, then proceed into the compile_fx function of inductor -> yes daddy
+        return compile_fx(model_, inputs_, config_patches=self.config) # DEBUG: CURRENT -> go through fx module one more time which uses inductor and aot
 
     def get_compiler_config(self):
         from torch._inductor.compile_fx import get_patched_config_dict
@@ -1594,6 +1602,8 @@ def compile(model: Optional[Callable] = None, *,
             options: Optional[Dict[str, Union[str, builtins.int, builtins.bool]]] = None,
             disable: builtins.bool = False) -> Callable:
     """
+    NOTE: trace this api and understand all optimizations end to end done to the model.
+    
     Optimizes given model/function using TorchDynamo and specified backend.
 
     Concretely, for every frame executed within the compiled region, we will attempt
@@ -1677,11 +1687,15 @@ def compile(model: Optional[Callable] = None, *,
     if mode is None and options is None:
         mode = "default"
     if backend == "inductor":
+        # this is used in repro
         backend = _TorchCompileInductorWrapper(mode, options, dynamic)
     else:
         backend = _TorchCompileWrapper(backend, mode, options, dynamic)
 
-    return torch._dynamo.optimize(backend=backend, nopython=fullgraph, dynamic=dynamic, disable=disable)(model)
+    # breakpoint()
+    optimize_context = torch._dynamo.optimize(backend=backend, nopython=fullgraph, dynamic=dynamic, disable=disable)
+    optimize_context_op = optimize_context(model)
+    return optimize_context_op
 
 
 def _register_device_module(device_type, module):

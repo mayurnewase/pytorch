@@ -271,6 +271,7 @@ class _WrappedCall:
             if self.cls_call is not None:
                 return self.cls_call(obj, *args, **kwargs)
             else:
+                # breakpoint()        # DEBUG: forward call gets mingled from here
                 return super(self.cls, obj).__call__(*args, **kwargs)  # type: ignore[misc]
         except Exception as e:
             assert e.__traceback__
@@ -661,7 +662,8 @@ class {module_name}(torch.nn.Module):
 
         cls = type(self)
         co_fields = self._graph._co_fields if hasattr(self._graph, '_co_fields') else {}
-        cls.forward = _forward_from_src(self._code, python_code.globals, co_fields)
+        # breakpoint()
+        cls.forward = _forward_from_src(self._code, python_code.globals, co_fields)     # this gets the runtime params
 
         # Determine whether this class explicitly defines a __call__ implementation
         # to wrap. If it does, save it in order to have wrapped_call invoke it.
@@ -677,7 +679,7 @@ class {module_name}(torch.nn.Module):
         def call_wrapped(self, *args, **kwargs):
             return self._wrapped_call(self, *args, **kwargs)
 
-        cls.__call__ = call_wrapped
+        cls.__call__ = call_wrapped             # DEBUG: this wraps the call function
 
         return python_code
 

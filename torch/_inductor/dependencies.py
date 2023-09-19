@@ -326,12 +326,12 @@ def extract_read_writes(
 
     inner = rw.parent_handler.parent_handler
     return ReadWrites(
-        set(inner._reads),
-        set(inner._writes),
-        inner._index_exprs,
-        range_vars,
-        var_ranges,
-        rw.parent_handler._op_counts,
+        set(inner._reads),      # {MemoryDep('arg1_1', c0, {c0: s0**2})}
+        set(inner._writes),     # {MemoryDep('buf0', c0, {c0: s0**2})}
+        inner._index_exprs,     # empty set
+        range_vars,             # []
+        var_ranges,             # {d0: s0**2}
+        rw.parent_handler._op_counts,   # Counter({'load': 1, 'sin': 1, 'store': 1})
     )
 
 

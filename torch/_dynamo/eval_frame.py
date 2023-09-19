@@ -228,7 +228,7 @@ class _TorchDynamoContext:
                 "to use torch._dynamo.optimize(...) as an annotation/decorator. "
             )
         self.on_enter()
-        self.prior = set_eval_frame(self.callback)
+        self.prior = set_eval_frame(self.callback) # cpython function
         self.backend_ctx = self.extra_ctx_ctor()
         self.backend_ctx.__enter__()
         self.dynamic_ctx = enable_dynamic(self.dynamic, self.export)
@@ -244,10 +244,13 @@ class _TorchDynamoContext:
 
     def __call__(self, fn):
         # public api for compiler config/options
+        # DEBUG: gets called by compile function with our model / function
+
         def get_compiler_config():
             return self.compiler_config
 
-        fn = innermost_fn(fn)
+        fn = innermost_fn(fn)           # DEBUG: didn't do anything
+
         # Optimize the forward method of torch.nn.Module object
         if isinstance(fn, torch.nn.Module):
             mod = fn
@@ -262,10 +265,11 @@ class _TorchDynamoContext:
             new_mod.get_compiler_config = get_compiler_config  # type: ignore[attr-defined]
 
             return new_mod
+        
         assert callable(fn)
 
         try:
-            filename = inspect.getsourcefile(fn)
+            filename = inspect.getsourcefile(fn)   # DEBUG: my compile_demo file's full path
         except TypeError:
             filename = None
         if (
@@ -278,10 +282,15 @@ class _TorchDynamoContext:
             # call to a builtin without a frame for us to capture
             fn = external_utils.wrap_inline(fn)
 
-        callback = self.callback
+        callback = self.callback        # DEBUG: convert_frame.convert_frame(backend, hooks=hooks) is the callback
         on_enter = self.on_enter
         backend_ctx_ctor = self.extra_ctx_ctor
 
+        # TODO: find out who added __code__ object to fn => all python functions have it
+        # this function gets called from our script for train/inference
+        # this is function returned by torch.compile in my script for the inference for the first time
+        # then second time when its jitted by convert_frame._convert_frame function
+        # this gets called multiple time in the process -> bit magical right now, figure out later
         @functools.wraps(fn)
         def _fn(*args, **kwargs):
             if (
@@ -296,14 +305,23 @@ class _TorchDynamoContext:
                 else:
                     return fn(*args, **kwargs)
 
-            on_enter()
-            prior = set_eval_frame(callback)
-            backend_ctx = backend_ctx_ctor()
+            # breakpoint()
+            on_enter()                              # DEBUG: looks some hacky patches and wrappers
+
+            # DEBUG: on the first call while compiling callback is convert_frame.convert_frame(backend, hooks=hooks) and prior is empty
+            # DEBUG: on second call after compiling and calling compiled function, callback is empty and prior is convert_frame.<locals>._convert_frame
+            # DEBUG: find who is calling this _fn callback.
+
+            prior = set_eval_frame(callback)        # set_eval_frame is c function -> alters the python frame execution for some reason, find it later why its important
+            backend_ctx = backend_ctx_ctor()        # DEBUG: don't know this, and why does this go to catch_error function -> cuz its contextlib.nullcontext
             backend_ctx.__enter__()
             dynamic_ctx = enable_dynamic(self.dynamic, self.export)
-            dynamic_ctx.__enter__()
+            dynamic_ctx.__enter__()                 # DEBUG: dont know this, these 2 function calls are also modifying python frames, find out later
             try:
-                return fn(*args, **kwargs)
+                # breakpoint()
+                retult = fn(*args, **kwargs)        # this fn is different, and for the last time its the function aot_module_simplified.<locals>.forward which is the first wrapper for CompiledFXGraph compiled code which can't be stepped by pdb
+                return retult
+                # return fn(*args, **kwargs)          # DEBUG: after compilation, this gets call from somewhere and this fn is the actual compiled function entrypoint function aot_module_simplified.<locals>.forward
             finally:
                 set_eval_frame(prior)
                 dynamic_ctx.__exit__(None, None, None)
@@ -391,7 +409,7 @@ class OptimizeContext(_TorchDynamoContext):
                         "changing options to `torch.compile()` may require "
                         "calling `torch._dynamo.reset()` to take effect"
                     )
-            most_recent_backend = compiler_fn
+            most_recent_backend = compiler_fn       # <torch._TorchCompileInductorWrapper
             install_generation_tagging_init()
 
         compiler_fn = innermost_fn(callback)
@@ -399,7 +417,7 @@ class OptimizeContext(_TorchDynamoContext):
             callback=callback,
             on_enter=on_enter,
             backend_ctx_ctor=backend_ctx_ctor,
-            patch_fn=TorchPatcher.patch,
+            patch_fn=TorchPatcher.patch,            # ignore this for now, looks like a hack
             first_ctx=first_ctx,
             export=export,
             dynamic=dynamic,
@@ -429,17 +447,17 @@ def first_real_inst_idx(code):
             return inst.offset // 2
     raise RuntimeError("RESUME instruction not found in code")
 
-
+# how does this function is getting called, when fn is called from /home/mayur/projects/pytorch/torch/_dynamo/eval_frame.py(321)
 def catch_errors_wrapper(callback, hooks: Hooks):
     @functools.wraps(callback)
-    def catch_errors(frame, cache_size, frame_state):
+    def catch_errors(frame, cache_size, frame_state):   # QUESTION: who gives you frame, cache_size, frame_state here?
         assert frame_state is not None
 
         if (
             # TODO: the first condition is not covered by any test
             frame.f_lasti >= first_real_inst_idx(frame.f_code)
-            or skipfiles.check(frame.f_code.co_filename)
-            or config.disable
+            or skipfiles.check(frame.f_code.co_filename)        # after foo is compiled, this gets called with frame as TorchDynamoContext.__call__.fn function callback and gets skipped here
+            or config.disable                                   # check this flow
         ):
             log.debug("skipping %s %s", frame.f_code.co_name, frame.f_code.co_filename)
             return None
@@ -462,6 +480,7 @@ def catch_errors_wrapper(callback, hooks: Hooks):
                     )
                     return hijacked_callback(frame, cache_size, hooks, frame_state)
 
+        # breakpoint()
         with compile_lock:
             return callback(frame, cache_size, hooks, frame_state)
 
@@ -477,8 +496,10 @@ def _optimize_catch_errors(
     dynamic=False,
     compiler_config=None,
 ):
+    # this gets called from my example with inputs for inference.
+
     return OptimizeContext(
-        catch_errors_wrapper(compile_fn, hooks),
+        catch_errors_wrapper(compile_fn, hooks),        # DEBUG: this is a callback, used in subsequent functions
         backend_ctx_ctor=backend_ctx_ctor,
         first_ctx=True,
         export=export,
@@ -531,6 +552,8 @@ def optimize(
     dynamic=False,
 ):
     """
+    NOTE: debug start here
+    
     The main entrypoint of TorchDynamo.  Do graph capture and call
     backend() to optimize extracted graphs.
 
@@ -565,7 +588,7 @@ def optimize(
     if disable or os.environ.get("TORCHDYNAMO_DISABLE", "") == "1":
         return _NullDecorator()
 
-    backend = get_compiler_fn(backend)
+    backend = get_compiler_fn(backend)          # this is compiler function
 
     # Find if backend has any extra context manager
     backend_ctx_ctor = getattr(backend, "backend_ctx_ctor", null_context)
@@ -577,7 +600,7 @@ def optimize(
             hooks=hooks,
         )
     return _optimize_catch_errors(
-        convert_frame.convert_frame(backend, hooks=hooks),
+        convert_frame.convert_frame(backend, hooks=hooks),      # DEBUG: creates few callback chains, gets called on inference
         hooks,
         backend_ctx_ctor,
         dynamic=dynamic,

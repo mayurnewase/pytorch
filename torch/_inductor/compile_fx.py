@@ -280,6 +280,23 @@ def compile_fx_inner(
     user_visible_outputs=frozenset(),
     layout_opt=None,
 ):
+    """
+        called by inference compiler which takes fw_module given by partition function in tracer.trace
+        and should give back compiled graph
+
+        gm = graph module with nodes  = [arg0_1, arg1_1, sin, output]
+        example_inputs = [s0, FakeTensor(..., size=(s0, s0))]
+        cudagraphs = BoxedBool(value=False)
+        num_fixed = 0
+        is_backward = False
+        graph_id = 0
+        cpp_wrapper = False
+        aot_mode = False
+        is_inference = True
+        boxed_forward_device_index = BoxedDeviceIndex(value=None)
+        user_visible_outputs = {'sin'}
+        layout_opt = None
+    """
     if dynamo_utils.count_calls(gm.graph) == 0:
         return make_boxed_func(gm.forward)
 
@@ -300,7 +317,8 @@ def compile_fx_inner(
         "layout_opt": layout_opt,
     }
 
-    compiled_graph: CompiledFxGraph = fx_codegen_and_compile(
+    breakpoint()
+    compiled_graph: CompiledFxGraph = fx_codegen_and_compile(       # DEBUG: this gives CompilerFXGraph object whose compiled_artifact is the call to generated c++ code
         *graph_args, **graph_kwargs
     )
 
@@ -499,6 +517,7 @@ def fx_codegen_and_compile(
             user_visible_outputs=user_visible_outputs,
         )
         with V.set_graph_handler(graph):
+            breakpoint()
             graph.run(*example_inputs)
             context = torch._guards.TracingContext.get()
             if context is not None and context.output_strides is not None:
@@ -513,7 +532,7 @@ def fx_codegen_and_compile(
                         )
                     else:
                         context.output_strides.append(None)
-            compiled_fn = graph.compile_to_fn()
+            compiled_fn = graph.compile_to_fn()         # DEBUG: this wrote c++ code to tmp directory, and returned its python call wrapper
 
             if graph.disable_cudagraphs:
                 BoxedBool.disable(cudagraphs)
@@ -896,7 +915,7 @@ def compile_fx(
                 decompositions=decompositions,
             )
 
-    recursive_compile_fx = functools.partial(
+    recursive_compile_fx = functools.partial(           # this recursive call, calls this function as it self in the model_ param instead of GraphModule
         compile_fx,
         inner_compile=inner_compile,
         decompositions=decompositions,
@@ -920,7 +939,7 @@ def compile_fx(
 
         # Since handle_dynamo_export_graph will trigger compile_fx again,
         # Move these passes after handle_dynamo_export_graph to avoid repeated calls.
-        model_ = pre_grad_passes(model_, example_inputs_)
+        model_ = pre_grad_passes(model_, example_inputs_)       # didn't seem to do anything significant
 
     if any(isinstance(x, (list, tuple, dict)) for x in example_inputs_):
         return flatten_graph_inputs(
@@ -942,10 +961,18 @@ def compile_fx(
 
     @dynamo_utils.dynamo_timed
     def fw_compiler_base(model: torch.fx.GraphModule, example_inputs, is_inference):
+        """ 
+            this is the inference compiler, takes the fw_module and gives a callable which is same as user function graph
+            model = fw_module containing fx_graph given by partitioner with nodes = [arg0_1, arg1_1, sin, output]
+            example_inputs = [s0, FakeTensor(..., size=(s0, s0))]
+            is_inference = true
+        """
+        # breakpoint()
         if is_inference:
             # partition_fn won't be called
-            joint_graph_passes(model)
+            joint_graph_passes(model)               # this again goes through compile process and adds bunch of nodes to the graph
 
+        # breakpoint()
         num_rng_seed_offset_inputs = 2 if functorch_config.functionalize_rng_ops else 0
         fixed = len(example_inputs) - num_example_inputs - num_rng_seed_offset_inputs
         user_visible_outputs = set()
@@ -1010,7 +1037,7 @@ def compile_fx(
 
     fw_compiler = functools.partial(fw_compiler_base, is_inference=False)
 
-    if config.freezing and not torch.is_grad_enabled():
+    if config.freezing and not torch.is_grad_enabled(): # this is if our function contain something trainable
         decompositions = dict(decompositions)
         del decompositions[torch.ops.aten._native_batch_norm_legit_no_training.default]
 
@@ -1023,7 +1050,7 @@ def compile_fx(
             graph_id=graph_id,
             forward_device=forward_device,
         )
-    else:
+    else:                       # this is for inference or our function contain nothing trainable, like torch.sin
         inference_compiler = functools.partial(fw_compiler_base, is_inference=True)
 
     def partition_fn(graph, joint_inputs, **kwargs):
@@ -1054,15 +1081,21 @@ def compile_fx(
     tracing_context = (
         torch._guards.TracingContext.get() or torch._guards.TracingContext(fake_mode)
     )
+    # breakpoint()
     with V.set_fake_mode(fake_mode), torch._guards.tracing(tracing_context):
-        return aot_autograd(
+        aot_autograd_cb = aot_autograd(
             fw_compiler=fw_compiler,
             bw_compiler=bw_compiler,
             inference_compiler=inference_compiler,
             decompositions=decompositions,
             partition_fn=partition_fn,
             keep_inference_input_mutations=True,
-        )(model_, example_inputs_)
+        )
+        result = aot_autograd_cb(model_, example_inputs_)
+        # result here is 2 wrappers (forward and runtime_wrapper) to CompiledFXGraph's compiled_artifact function call
+
+        breakpoint()
+        return result
 
 
 # pass config dict back to user
